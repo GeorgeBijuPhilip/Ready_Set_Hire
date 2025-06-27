@@ -96,11 +96,6 @@ Built for job seekers, recruiters, and AI enthusiasts to improve interview prepa
 
 ---
 
-## 🏷 License
 
-MIT
-
----
-
-## 👨‍💻 Built by Cognify.AI
+## 👨‍💻 Built by GeorgeBiju
 
