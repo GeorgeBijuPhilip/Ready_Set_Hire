@@ -182,7 +182,7 @@ with gr.Blocks(theme=gr.themes.Soft()) as demo:
 
     gr.Markdown("""
     <div style='text-align:center; margin-top:2em; color:gray'>
-      🚀 Built by Cognify.AI
+      🚀 Built by GeorgeBiju
     </div>
     """)
 
