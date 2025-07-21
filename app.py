@@ -7,20 +7,21 @@ from langchain_community.vectorstores import FAISS
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from groq import Groq
 from dotenv import load_dotenv
-from faster_whisper import WhisperModel
 from gtts import gTTS
 import tempfile
 
 # Load environment variables
 load_dotenv()
-
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-groq_client = Groq(api_key=GROQ_API_KEY)
-whisper_model = WhisperModel("small", device="cpu", compute_type="int8")
 
+# Initialize Groq client
+groq_client = Groq(api_key=GROQ_API_KEY)
+
+# Utility to clean markdown-like artifacts
 def clean_markdown(text):
     return re.sub(r'[*_#`]+', '', text)
 
+# Resume summarizer
 def summarize_resume(resume_text):
     prompt = f"""Create a concise summary of this resume highlighting:
     1. Professional title/role
@@ -38,6 +39,7 @@ def summarize_resume(resume_text):
     )
     return clean_markdown(response.choices[0].message.content)
 
+# ATS scoring
 def calculate_ats_score(resume_text):
     prompt = f"""Analyze this resume and calculate an ATS score (0-100) considering:
     1. Keyword optimization (20 pts)
@@ -60,22 +62,22 @@ def calculate_ats_score(resume_text):
     except:
         return 50
 
-def process_resume(uploaded_file):
-    loader = PyPDFLoader(uploaded_file.name)
-    docs = RecursiveCharacterTextSplitter(
-        chunk_size=1000,
-        chunk_overlap=200,
-        separators=["\n\n", "\n", " ", ""]
-    ).split_documents(loader.load())
-    full_text = "\n".join([doc.page_content for doc in docs])
-    FAISS.from_documents(docs, HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")).save_local("resume_index")
+# Resume parsing and vector store
+def process_resume(uploaded_path):
+    loader = PyPDFLoader(uploaded_path)
+    docs = loader.load()
+    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+    chunks = text_splitter.split_documents(docs)
+    full_text = "\n".join([doc.page_content for doc in chunks])
+    embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+    FAISS.from_documents(chunks, embeddings).save_local("resume_index")
     return summarize_resume(full_text), calculate_ats_score(full_text)
 
+# Placeholder for transcription
 def transcribe_audio(file_path):
-    segments, _ = whisper_model.transcribe(file_path)
-    return " ".join([segment.text for segment in segments])
+    return "⚠️ Transcription not available in Streamlit Cloud. Run locally for full features."
 
-# Streamlit UI
+# ---------- Streamlit UI ----------
 st.set_page_config(page_title="🚀 Ready Set Hire", layout="centered")
 st.title("🚀 Ready Set Hire")
 
@@ -97,12 +99,8 @@ with tab1:
 
 with tab2:
     st.subheader("🎤 Record Audio")
-    audio_file = st.file_uploader("Upload a WAV file for transcription", type=["wav", "mp3"])
+    audio_file = st.file_uploader("Upload a WAV/MP3 file for transcription", type=["wav", "mp3"])
 
     if audio_file:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_audio:
-            tmp_audio.write(audio_file.read())
-            tmp_audio_path = tmp_audio.name
         st.audio(audio_file)
-        st.write("📝 Transcription:")
-        st.info(transcribe_audio(tmp_audio_path))
+        st.info(transcribe_audio("dummy_path"))
