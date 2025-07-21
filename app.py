@@ -1,4 +1,4 @@
-import gradio as gr
+import streamlit as st
 import os
 import re
 from langchain_community.document_loaders import PyPDFLoader
@@ -8,22 +8,14 @@ from langchain_community.embeddings import HuggingFaceEmbeddings
 from groq import Groq
 from dotenv import load_dotenv
 from faster_whisper import WhisperModel
-from elevenlabs.client import ElevenLabs
 from gtts import gTTS
 import tempfile
 
-# Load environment variables from .env
+# Load environment variables
 load_dotenv()
+
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
-
-# Check API keys
-if not GROQ_API_KEY or not ELEVENLABS_API_KEY:
-    raise EnvironmentError("Missing API keys. Please create a .env file with GROQ_API_KEY and ELEVENLABS_API_KEY.")
-
-# Initialize clients
 groq_client = Groq(api_key=GROQ_API_KEY)
-elevenlabs_client = ElevenLabs(api_key=ELEVENLABS_API_KEY)
 whisper_model = WhisperModel("small", device="cpu", compute_type="int8")
 
 def clean_markdown(text):
@@ -68,123 +60,49 @@ def calculate_ats_score(resume_text):
     except:
         return 50
 
-def process_resume(file):
-    try:
-        loader = PyPDFLoader(file.name)
-        docs = RecursiveCharacterTextSplitter(
-            chunk_size=1000,
-            chunk_overlap=200,
-            separators=["\n\n", "\n", " ", ""]
-        ).split_documents(loader.load())
-        embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-        FAISS.from_documents(docs, embeddings).save_local("resume_index")
-        full_text = "\n".join([doc.page_content for doc in docs])
-        gr.Info("✅ Resume processed successfully!")
-        return summarize_resume(full_text), f"ATS Score: {calculate_ats_score(full_text)}/100"
-    except Exception as e:
-        gr.Warning(f"❌ Error: {e}")
-        return f"Error: {e}", "ATS Score: N/A"
+def process_resume(uploaded_file):
+    loader = PyPDFLoader(uploaded_file.name)
+    docs = RecursiveCharacterTextSplitter(
+        chunk_size=1000,
+        chunk_overlap=200,
+        separators=["\n\n", "\n", " ", ""]
+    ).split_documents(loader.load())
+    full_text = "\n".join([doc.page_content for doc in docs])
+    FAISS.from_documents(docs, HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")).save_local("resume_index")
+    return summarize_resume(full_text), calculate_ats_score(full_text)
 
-def transcribe_audio(audio_path):
-    if not audio_path:
-        return "No audio recorded"
-    segments, _ = whisper_model.transcribe(audio_path)
+def transcribe_audio(file_path):
+    segments, _ = whisper_model.transcribe(file_path)
     return " ".join([segment.text for segment in segments])
 
-def generate_question(resume_text):
-    prompt = f"""Generate one general interview question focusing on:
-    - Teamwork experiences
-    - Challenges overcome
-    - Learning experiences
-    - Career motivations
-    - Problem-solving examples
+# Streamlit UI
+st.set_page_config(page_title="🚀 Ready Set Hire", layout="centered")
+st.title("🚀 Ready Set Hire")
 
-    Make it conversational and open-ended.
+tab1, tab2 = st.tabs(["📄 Resume Analysis", "🎤 Mock Interview"])
 
-    Resume Excerpt:
-    {resume_text[:2000]}... [truncated]"""
-    response = groq_client.chat.completions.create(
-        messages=[{"role": "user", "content": prompt}],
-        model="llama3-70b-8192",
-        temperature=0.7,
-    )
-    return clean_markdown(response.choices[0].message.content)
+with tab1:
+    st.subheader("📄 Upload Resume (PDF)")
+    resume_file = st.file_uploader("Choose a PDF", type="pdf")
 
-def evaluate_response(question, response_text):
-    prompt = f"""Evaluate this interview response on:
-    1. Clarity (1-5)
-    2. Confidence (1-5)
-    3. Relevance (1-5)
-    4. Suggested improvements
+    if resume_file:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+            tmp.write(resume_file.read())
+            tmp_path = tmp.name
 
-    Question: {question}
-    Response: {response_text}"""
-    evaluation = groq_client.chat.completions.create(
-        messages=[{"role": "user", "content": prompt}],
-        model="llama3-70b-8192",
-        temperature=0.2,
-    )
-    return clean_markdown(evaluation.choices[0].message.content)
+        summary, score = process_resume(tmp_path)
+        st.success("✅ Resume processed!")
+        st.text_area("📝 Resume Summary", summary, height=200)
+        st.metric("📊 ATS Score", f"{score}/100")
 
-def gtts_speak(text):
-    try:
-        if not text.strip():
-            raise ValueError("Empty text")
-        tts = gTTS(text, lang="en", tld="com")
-        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
-            tts.save(tmp.name)
-            return tmp.name
-    except Exception as e:
-        gr.Warning(f"gTTS Error: {e}")
-        return None
+with tab2:
+    st.subheader("🎤 Record Audio")
+    audio_file = st.file_uploader("Upload a WAV file for transcription", type=["wav", "mp3"])
 
-with gr.Blocks(theme=gr.themes.Soft()) as demo:
-    gr.Markdown("<h1 style='font-size: 3em; text-align: center;'>🚀 Ready Set Hire</h1>")
-
-    with gr.Tab("📄 Resume Analysis"):
-        with gr.Row():
-            with gr.Column():
-                resume_upload = gr.File(label="📄 Upload Resume (PDF)", file_types=[".pdf"])
-                process_btn = gr.Button("🔍 Analyze Resume", variant="primary")
-            with gr.Column():
-                resume_summary = gr.Textbox(label="📝 Resume Summary", lines=10)
-                hear_summary_btn = gr.Button("🔊 Hear Summary")
-                summary_audio = gr.Audio(visible=True)
-                ats_score = gr.Textbox(label="📊 ATS Compatibility Score", interactive=False)
-        process_btn.click(fn=process_resume, inputs=resume_upload, outputs=[resume_summary, ats_score])
-        hear_summary_btn.click(fn=gtts_speak, inputs=resume_summary, outputs=summary_audio)
-
-    with gr.Tab("🎤 Mock Interview"):
-        with gr.Row():
-            with gr.Column():
-                audio_input = gr.Audio(
-                    label="🎤 Record Your Response",
-                    sources=["microphone"],
-                    type="filepath",
-                    interactive=True
-                )
-                transcribe_btn = gr.Button("📝 Transcribe Response")
-                question_box = gr.Textbox(label="❓ Current Question")
-                generate_btn = gr.Button("🤖 Generate New Question")
-                gtts_question_btn = gr.Button("🔊 Hear Question")
-                question_audio = gr.Audio(visible=True)
-            with gr.Column():
-                transcription = gr.Textbox(label="💬 Your Response")
-                evaluation = gr.Textbox(label="📝 Feedback", lines=8)
-                gtts_feedback_btn = gr.Button("🔊 Hear Feedback")
-                feedback_audio = gr.Audio(visible=True)
-
-        transcribe_btn.click(fn=transcribe_audio, inputs=audio_input, outputs=transcription)
-        generate_btn.click(fn=generate_question, inputs=resume_summary, outputs=question_box)
-        transcription.change(fn=evaluate_response, inputs=[question_box, transcription], outputs=evaluation)
-        gtts_question_btn.click(fn=gtts_speak, inputs=question_box, outputs=question_audio)
-        gtts_feedback_btn.click(fn=gtts_speak, inputs=evaluation, outputs=feedback_audio)
-
-    gr.Markdown("""
-    <div style='text-align:center; margin-top:2em; color:gray'>
-      🚀 Built by GeorgeBiju
-    </div>
-    """)
-
-if __name__ == "__main__":
-    demo.launch()
+    if audio_file:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp_audio:
+            tmp_audio.write(audio_file.read())
+            tmp_audio_path = tmp_audio.name
+        st.audio(audio_file)
+        st.write("📝 Transcription:")
+        st.info(transcribe_audio(tmp_audio_path))
